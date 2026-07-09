@@ -1,2 +1,3 @@
 *.zip
 app-debug.apk
+.DS_Store
