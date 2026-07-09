@@ -19,6 +19,7 @@ class ReelBlockerService : AccessibilityService() {
 
     companion object {
         private const val TAG = "ReelBlocker"
+        private const val DUMP_TAG = "ReelBlockerDump"
         private const val INSTAGRAM_PACKAGE = "com.instagram.android"
 
         // Instagram calls Reels "Clips" internally in a lot of its own code/IDs,
@@ -34,9 +35,17 @@ class ReelBlockerService : AccessibilityService() {
         )
 
         private const val COOLDOWN_MS = 1_200L
+
+        // TEMPORARY: while we're figuring out Instagram's current real view IDs,
+        // this dumps the whole node tree to Logcat (tag "ReelBlockerDump") every
+        // couple of seconds so it can be captured with `adb logcat -s ReelBlockerDump:D`.
+        // Set to false once detection is confirmed working, to save battery/log noise.
+        private const val DEBUG_DUMP = true
+        private const val DUMP_INTERVAL_MS = 2_000L
     }
 
     private var lastActionTime = 0L
+    private var lastDumpTime = 0L
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
@@ -46,11 +55,21 @@ class ReelBlockerService : AccessibilityService() {
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) return
 
-        val now = System.currentTimeMillis()
-        if (now - lastActionTime < COOLDOWN_MS) return
-
         val root = rootInActiveWindow ?: return
         try {
+            if (DEBUG_DUMP) {
+                val now = System.currentTimeMillis()
+                if (now - lastDumpTime > DUMP_INTERVAL_MS) {
+                    lastDumpTime = now
+                    Log.d(DUMP_TAG, "===== DUMP START =====")
+                    dumpTree(root)
+                    Log.d(DUMP_TAG, "===== DUMP END =====")
+                }
+            }
+
+            val now = System.currentTimeMillis()
+            if (now - lastActionTime < COOLDOWN_MS) return
+
             if (containsReelsNode(root)) {
                 Log.d(TAG, "Reels view detected — redirecting to Home")
                 lastActionTime = now
@@ -58,6 +77,23 @@ class ReelBlockerService : AccessibilityService() {
             }
         } finally {
             root.recycle()
+        }
+    }
+
+    /** Logs every node's class name, view ID, and content description/text. */
+    private fun dumpTree(node: AccessibilityNodeInfo, depth: Int = 0) {
+        if (depth > 60) return
+        val indent = "  ".repeat(depth)
+        val id = node.viewIdResourceName ?: "-"
+        val cls = node.className ?: "-"
+        val desc = node.contentDescription ?: "-"
+        val text = node.text ?: "-"
+        Log.d(DUMP_TAG, "$indent[$depth] class=$cls id=$id desc=$desc text=$text")
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            dumpTree(child, depth + 1)
+            child.recycle()
         }
     }
 

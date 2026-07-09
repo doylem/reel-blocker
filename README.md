@@ -67,19 +67,45 @@ This uses zero disk space on your machine beyond the project folder itself
 6. Open Instagram and try tapping into Reels — it should bounce you back to
    Home almost instantly.
 
-## If it stops working after an Instagram update
+## If Reels isn't being blocked (or stops working after an Instagram update)
 
-Instagram periodically renames its internal view IDs. If Reels stops getting
-blocked:
+Instagram periodically renames its internal view IDs, and the current build
+may use different ones than the keywords baked into this project. Rather than
+guess, capture what's actually on screen:
 
-1. Open Instagram, navigate into Reels.
-2. In Android Studio: `View > Tool Windows > Layout Inspector`, attach to the
-   Instagram process, and inspect the view tree to find the current resource
-   ID for the Reels player / bottom tab (or run
-   `adb shell uiautomator dump` and pull the XML).
-3. Add the new ID substring to the `REEL_KEYWORDS` list in
-   `ReelBlockerService.kt`.
-4. Re-run.
+1. **Install `adb` only — not Android Studio.** Download "SDK Platform-Tools"
+   for your OS from Google directly (search "android platform tools
+   download"); it's a ~15MB zip, just a handful of command-line binaries.
+   Unzip it anywhere.
+2. Enable USB debugging on your phone: Settings > About phone > tap "Build
+   number" 7 times > Developer options > USB debugging.
+3. Plug your phone in via USB. On your phone, approve the "Allow USB
+   debugging?" prompt.
+4. In a terminal, `cd` into the folder you unzipped, then run:
+   ```
+   ./adb devices
+   ```
+   You should see your phone listed (approve any on-phone prompt if it
+   appears). On Windows use `adb.exe` instead of `./adb`.
+5. Make sure `DEBUG_DUMP = true` in `ReelBlockerService.kt` (it is by
+   default), rebuild via the GitHub Actions workflow, and reinstall the APK.
+6. Run:
+   ```
+   ./adb logcat -s ReelBlockerDump:D
+   ```
+7. Open Instagram and tap into Reels. You'll see a stream of lines like:
+   ```
+   [12] class=android.widget.FrameLayout id=com.instagram.android:id/some_id desc=- text=-
+   ```
+8. Copy the block of lines that appear right as/after Reels opens (a few
+   dozen lines is plenty) and share them — that's enough to identify the
+   real IDs, classes, or content-descriptions to key off of, and update
+   `REEL_KEYWORDS` (or the detection logic itself, if Instagram is using
+   Jetpack Compose views that don't carry a resource ID the way classic
+   Android Views do — in which case detection needs to match on class name
+   or content description instead).
+9. Once detection is confirmed reliable, set `DEBUG_DUMP = false` to stop the
+   log spam and save a little battery.
 
 This is the same maintenance burden every accessibility-service-based blocker
 (free or paid) has — there's no way around Instagram being able to change its
