@@ -1,6 +1,15 @@
+<div align="center">
+
 # 📵 Reel Blocker
 
 **A free, tiny Android app that blocks Instagram Reels — nothing else.**
+
+[![Build APK](https://github.com/doylem/reel-blocker/actions/workflows/build.yml/badge.svg)](https://github.com/doylem/reel-blocker/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/doylem/reel-blocker)](https://github.com/doylem/reel-blocker/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/tools/releases/platforms)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+</div>
 
 Feed, Stories, DMs, and posting all work exactly as normal. The moment the
 Reels player opens, you're bounced straight back to your Home tab. No
@@ -118,6 +127,21 @@ has, there's no way around it.
   app-specific description matcher alongside `isReelPlayerDescription()`.
 - To block other Instagram surfaces (e.g. the Explore grid), find their
   accessibility label the same way (via `DEBUG_DUMP`) and add a matcher.
+
+## Testing
+
+The label-matching logic lives in a plain Kotlin object, `ReelMatcher`
+(`app/src/main/java/com/example/reelblocker/ReelMatcher.kt`), kept free of
+any Android framework types specifically so it's unit-testable without an
+emulator. Tests live in `app/src/test/.../ReelMatcherTest.kt` and cover the
+real captured label strings, case-insensitivity, and the "Suggested Reel"
+Home-feed wording that must *not* match. They run automatically in CI (`gradle testDebugUnitTest`) before every build;
+run them locally the same way if you have Gradle and the Android SDK
+installed (this project doesn't commit a Gradle wrapper, to keep the repo
+free of Android Studio requirements — see [Setup](#install) above).
+
+If you add a new matcher (e.g. for a different app or a different Instagram
+surface), add it to `ReelMatcher` and cover it with a test the same way.
 
 ## Contributing
 

@@ -1,136 +1,139 @@
-# AGENTS.md — Reel Blocker project handoff
+# AGENTS.md — Reel Blocker project guide
 
 ## What this is
-A personal Android app that blocks Instagram Reels while leaving feed/DMs
-usable, built as a free/DIY alternative to paid "Reels blocker" apps. It's an
-`AccessibilityService` that watches Instagram's screen and, when it detects
-the immersive Reels player, taps the phone back to Instagram's Home tab.
 
-The user is tech-savvy, on Android, wants everything as simple/lightweight as
-possible, and does NOT want Android Studio installed (disk space). All
-building happens via GitHub Actions; the user only needs `git` and `adb`
-locally.
+A tiny Android app that blocks Instagram Reels while leaving feed/DMs
+usable. It's an `AccessibilityService`, scoped to `com.instagram.android`
+only, that watches Instagram's on-screen accessibility tree and, when it
+detects the immersive Reels player, taps the phone back to Instagram's Home
+tab (falling back to the system Back action if it can't find the Home tab).
 
-## Current status (as of last session)
-Detection logic has gone through two iterations:
+It's built to require zero local Android tooling: all builds run on GitHub
+Actions, and the only local tools needed are `git` and `adb`. See
+[README.md](README.md) for end-user install instructions — this file is for
+whoever is extending or maintaining the code itself.
 
-1. **First attempt (wrong): matched on Android view IDs** (guessed keywords
-   like `clips_tab`, `reel_viewer`, etc.). This never worked. We proved why
-   via a real `adb logcat` capture: **Instagram does not expose
-   `viewIdResourceName` to the accessibility tree at all** — every single
-   node in a full-tree dump came back with `id=-`. This ID-based approach
-   was fundamentally dead on arrival, not just miscalibrated.
+## Architecture
 
-2. **Second attempt (current): match on content-description text.** The same
-   capture showed Instagram DOES expose rich, real accessibility labels via
-   `contentDescription`, including on the Reels player itself:
-   ```
-   Reel by shahin_doors. Double tap to play or pause.
-   ```
-   vs. an in-feed "suggested reel" card in the normal Home feed, which is
-   worded differently:
-   ```
-   Suggested Reel by Daily Brief Global, 3,136 likes, 41 comments, 3 hours ago
-   ```
-   Current logic in `ReelBlockerService.kt` (`isReelPlayerDescription()`)
-   matches strings that `startsWith("Reel by")` AND `contains("Double tap to
-   play or pause")`, which correctly excludes the "Suggested Reel by..."
-   Home-feed wording so normal feed scrolling isn't disrupted.
+### Detection strategy
 
-**Problem: this second version has NOT yet been confirmed working.** The
-user reported "Reels still played" after installing a build with this logic.
-The service IS running (`"Reel Blocker service connected"` appears in
-logcat), but no `"Reels player detected"` log line appeared either — meaning
-detection just isn't matching, for reasons not yet diagnosed.
+Instagram does **not** expose `viewIdResourceName` to the accessibility tree
+at all (confirmed via a real `adb logcat` full-tree capture — every node came
+back `id=-`). So detection keys off `contentDescription` instead: the label
+Instagram attaches to the immersive Reels player for screen-reader users,
+e.g.:
 
-**Last action taken:** re-enabled `DEBUG_DUMP = true` and added a
-"near-miss" diagnostic — logs any node whose `contentDescription` merely
-contains the substring "reel" (case-insensitive), along with whether it
-matched `isReelPlayerDescription()`. This build has been pushed but **we do
-not yet have the resulting log output**. This is the very next step:
-capture `adb logcat -s ReelBlocker:D ReelBlockerDump:D` while opening Reels,
-look for `NEAR-MISS candidate` lines, and see why the match is failing —
-likely candidates: extra/different whitespace, a slightly different phrase
-Instagram is using now, the match logic only checking `contentDescription`
-and missing some other node property, or the relevant node simply isn't
-being traversed for some reason (e.g. it's outside `rootInActiveWindow`,
-though the original capture proved that same tree traversal *did* reach that
-text, so this is less likely — the code between the two captures shouldn't
-have changed the traversal itself, only the matching function).
+```
+Reel by shahin_doors. Double tap to play or pause.
+```
 
-## Repo / build setup
+This is matched by `ReelMatcher.isReelPlayerDescription()` — `startsWith("Reel
+by")` AND `contains("Double tap to play or pause")`. The `startsWith` check
+is deliberate: Instagram's Home-feed inline "suggested reel" cards use a
+different, non-immersive wording (`"Suggested Reel by someuser, 41 comments,
+..."`), which must **not** trigger a redirect, or ordinary feed scrolling
+would be constantly interrupted.
+
+### The off-screen-node trap (already hit and fixed once — don't reintroduce)
+
+Content-description matching alone isn't sufficient, because Instagram keeps
+the Reels tab's `ViewPager` page (and its accessibility nodes) instantiated
+in the tree even while you're on Home — it's just positioned off-screen, not
+destroyed. A pure tree-wide description match will keep finding that stale
+node forever and loop the redirect on every polling cycle (this was observed
+live: the app snapped back to Home once, then kept re-triggering every
+~1.2–2s indefinitely). The fix, in `ReelBlockerService.containsReelsNode()`,
+is to additionally require `node.isVisibleToUser` before treating a match as
+real. Any future detection logic must preserve this visibility gate.
+
+### Code layout
+
+- `ReelMatcher.kt` — pure string-matching logic (no `android.*` imports),
+  covering: the immersive Reels player label, a view-ID fallback (kept in
+  case Instagram ever re-exposes resource IDs), and the bottom-nav Home tab
+  label. Deliberately framework-free so it's unit-testable on the JVM without
+  an emulator or Robolectric.
+- `ReelBlockerService.kt` — the `AccessibilityService`. Walks the
+  accessibility tree (`containsReelsNode`, `findHomeTabNode`), calls into
+  `ReelMatcher` for the actual string matching, and performs the redirect
+  (`goHomeOrBack`). Also has an optional full-tree logging mode
+  (`DEBUG_DUMP`) and a permanent low-cost "near-miss" log line (any node
+  whose description merely contains "reel", cheap since it's a simple
+  substring check) for diagnosing future Instagram wording changes.
+- `MainActivity.kt` — trivial status screen (shows whether the accessibility
+  service is currently enabled) + a button that opens Accessibility settings
+  directly.
+- `app/src/main/res/xml/accessibility_service_config.xml` — service config;
+  `android:packageNames="com.instagram.android"` is what scopes the service
+  to Instagram only. `android:canRetrieveWindowContent="true"` is required
+  for tree inspection.
+- `app/src/test/.../ReelMatcherTest.kt` — JUnit unit tests for `ReelMatcher`.
+  Runs in CI via `gradle testDebugUnitTest` before every build.
+
+## Build / CI / release pipeline
 
 - **Build:** GitHub Actions (`.github/workflows/build.yml`), triggered on
-  push to `main`/`master`. Produces artifact `ReelBlocker-debug-apk`
-  containing `app-debug.apk`.
-- **No Android Studio needed** — GitHub's hosted runners have the Android
-  SDK preinstalled; the workflow just runs `gradle assembleDebug`.
-- **Signing:** originally tried caching `~/.android/debug.keystore` across
-  CI runs via `actions/cache` — this was unreliable (a rebuild after the
-  cache should have been warm still produced a signature mismatch on
-  install). **Fixed by committing an actual fixed debug keystore into the
-  repo** at `keystore/debug.keystore`, referenced directly from
-  `app/build.gradle`'s `signingConfigs.debug` block (alias
-  `androiddebugkey`, password `android` — standard Android debug key
-  convention). This is intentional and safe to commit; debug keys aren't
-  secret. Every build from GitHub Actions or a local machine is now signed
-  identically, so `adb install -r` should always update in place.
-- **User's phone adb serial:** `R5CX92M16GR` (there's also a stray
-  `emulator-5562 offline` entry in `adb devices` on this machine — ignore it,
-  it isn't the phone). Because there's more than one device, adb commands
-  need `-s R5CX92M16GR` right after `adb` (not mixed into subcommand flags),
-  e.g.:
-  ```
-  adb -s R5CX92M16GR install -r app-debug.apk
-  adb -s R5CX92M16GR uninstall com.example.reelblocker
-  adb -s R5CX92M16GR logcat -s ReelBlocker:D ReelBlockerDump:D
-  ```
-- **Sideloading gotcha:** installing the APK by tapping it from Dropbox/Files
-  hits Android's "restricted settings" block for sideloaded apps (blocks the
-  Accessibility permission toggle). Installing via `adb install` bypasses
-  this entirely — adb-installed apps aren't treated as "unknown source" for
-  this purpose. Prefer `adb install` over manual sideloading going forward.
+  push to `main`/`master`, or manually via `workflow_dispatch`. Runs
+  `gradle testDebugUnitTest` then `gradle assembleDebug` on GitHub's hosted
+  runners (Android SDK preinstalled — no wrapper or local SDK needed). The
+  built APK is uploaded as the `ReelBlocker-debug-apk` workflow artifact.
+- **Releases:** built APKs are attached to tagged GitHub Releases (see the
+  [Releases page](../../releases)) rather than committed into the repo —
+  committing binaries directly bloats git history and was tried and reverted
+  once already; don't reintroduce that pattern.
+- **Signing:** the repo commits a fixed `keystore/debug.keystore` (standard
+  Android debug alias/password: `androiddebugkey` / `android`), referenced
+  from `app/build.gradle`'s `signingConfigs.debug`. This is intentional and
+  safe — debug keys aren't secret, Android Studio generates an equivalent one
+  locally on every machine. The point is that every build (CI or local) is
+  signed identically, so `adb install -r` always updates in place instead of
+  hitting `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. (Switching *to* this fixed
+  keystore from some other signature requires one uninstall/reinstall; after
+  that, updates apply cleanly.)
 - **Package name:** `com.example.reelblocker`. Service class:
-  `.ReelBlockerService`. After any fresh install (not update), the user must
-  re-enable it at Settings > Accessibility > Installed apps > Reel Blocker.
+  `.ReelBlockerService`. A **fresh install** (not an update) resets the
+  Accessibility toggle — re-enable at Settings > Accessibility > Installed
+  apps > Reel Blocker. Also, installing via `adb install` (rather than
+  tapping the APK from Files/Dropbox/etc.) skips Android's "restricted
+  settings" block on newly sideloaded apps, so the toggle works immediately.
 
-## Key files
+## Testing
 
-- `app/src/main/java/com/example/reelblocker/ReelBlockerService.kt` — the
-  core accessibility service and all detection logic. This is almost
-  certainly where the next fix needs to happen.
-- `app/src/main/java/com/example/reelblocker/MainActivity.kt` — trivial
-  status screen + button to open Accessibility settings.
-- `app/src/main/res/xml/accessibility_service_config.xml` — service config,
-  scoped to `com.instagram.android` only.
-- `.github/workflows/build.yml` — CI build.
-- `keystore/debug.keystore` — fixed signing key, see above.
-- `README.md` — user-facing setup/troubleshooting doc, kept in sync with
-  whatever the current detection approach is.
+Unit tests cover `ReelMatcher` only — the pure string-matching logic. The
+accessibility-tree-walking code in `ReelBlockerService` (`containsReelsNode`,
+`findHomeTabNode`, `dumpTree`) depends on `android.view.accessibility.*`
+framework types and is not unit tested; it's exercised by manual on-device
+testing instead (see README's troubleshooting section for the `DEBUG_DUMP`/
+`adb logcat` workflow). If you refactor tree-walking logic, prefer extracting
+any new pure decision logic into `ReelMatcher` so it stays testable, rather
+than growing untested logic inside the tree walk.
 
-## Immediate next step for whoever picks this up
+## Extending
 
-1. Get the `NEAR-MISS candidate` log output from the user (or run it
-   yourself if you have adb access to the same phone) to see the *actual*
-   live content-description string(s) on the Reels player right now.
-2. Update `isReelPlayerDescription()` to match reality.
-3. Set `DEBUG_DUMP = false` once confirmed working (currently `true` — logs
-   a full tree dump every ~2s while on Instagram, which is noisy/costs a
-   little battery, fine for debugging but shouldn't ship long-term).
-4. Remove or keep the near-miss diagnostic log line as a permanent low-cost
-   canary — up to you; it only logs when "reel" appears in a description, so
-   it's cheap.
-5. Consider whether the fallback `performGlobalAction(GLOBAL_ACTION_BACK)`
-   (used when the Home tab node can't be found) is firing correctly, once
-   detection itself is confirmed — it hasn't been meaningfully tested yet
-   since detection never triggered it in a live test.
+- **Block other Instagram surfaces** (e.g. the Explore grid): capture its
+  accessibility label via `DEBUG_DUMP`, add a matcher function to
+  `ReelMatcher`, cover it with a test, then call it from
+  `containsReelsNode()`.
+- **Block Reels-equivalent content in other apps** (Facebook, YouTube
+  Shorts): add the target package to
+  `accessibility_service_config.xml`'s `android:packageNames` (colon-
+  separated list) and `INSTAGRAM_PACKAGE`-style checks in
+  `ReelBlockerService`, then add app-specific matchers to `ReelMatcher` (the
+  label wording will differ per app).
+- Whatever you add, preserve the `isVisibleToUser` gate (see "The
+  off-screen-node trap" above) — it's easy to reintroduce the redirect loop
+  by matching on tree presence alone.
 
-## Things NOT to re-litigate (already settled, don't redo this work)
+## Known limitations / maintenance burden
 
-- Android Studio is deliberately avoided; keep using GitHub Actions + adb.
-- View-ID-based detection is confirmed dead; don't suggest going back to it.
-- Keystore caching via `actions/cache` is confirmed unreliable; the fixed
-  committed keystore is the deliberate replacement — don't revert to caching.
-- Sideloading via Dropbox/Files works but requires jumping through
-  "restricted settings"; `adb install` is strictly better for this user's
-  workflow and should be the default recommendation.
+- Instagram can change the Reels player's accessibility label wording at any
+  time, silently breaking detection. There's no way around this — it's the
+  same burden every accessibility-service-based blocker (free or paid) has.
+  The `NEAR-MISS` log line exists specifically to make re-diagnosing this
+  fast: it fires on any node whose description merely contains "reel",
+  whether or not it currently matches, so a fresh device capture will show
+  the new wording immediately.
+- No automated on-device/instrumentation testing exists (would require an
+  emulator or physical device in CI); all tree-walking behavior is verified
+  manually. If this becomes painful, consider Robolectric for
+  `AccessibilityNodeInfo` shadows rather than a full instrumentation suite.
