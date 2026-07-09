@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Reel Blocker</string>
+    <string name="accessibility_service_description">Watches only Instagram\'s screen. When it detects the Reels player, it switches you to the Home tab. Nothing is read, stored, or sent anywhere — it never looks at any other app.</string>
+</resources>
