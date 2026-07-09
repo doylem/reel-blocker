@@ -13,6 +13,21 @@ inspect the on-screen view hierarchy of other apps, scoped here to
 finds a view ID Instagram uses internally for Reels (Instagram calls Reels
 "Clips" in a lot of its own code), it taps the Home tab for you.
 
+## About the debug keystore
+
+This project includes `keystore/debug.keystore`, a fixed Android debug signing
+key committed directly into the repo. This is intentional and safe — debug
+keys are meant to be shared/local (unlike release keys, which must stay
+secret); Android Studio itself auto-generates one of these on every machine
+using the same well-known alias/password. Committing a fixed one here just
+means every build — whether from GitHub Actions or your own machine — is
+signed identically, so `adb install -r` always updates in place instead of
+occasionally failing with a signature mismatch.
+
+You'll need to uninstall + reinstall once when first switching to this
+keystore (since it differs from whatever was signing the app before), but
+every build after that should install right over the previous one.
+
 ## Setup — Option A: build it with GitHub Actions (no local install, no disk space)
 
 If you don't want to install Android Studio or the Android SDK locally, this
@@ -69,9 +84,13 @@ This uses zero disk space on your machine beyond the project folder itself
 
 ## If Reels isn't being blocked (or stops working after an Instagram update)
 
-Instagram periodically renames its internal view IDs, and the current build
-may use different ones than the keywords baked into this project. Rather than
-guess, capture what's actually on screen:
+Detection is based on the accessibility label Instagram attaches to the
+immersive Reels player (confirmed via a real device capture — Instagram does
+NOT expose view/resource IDs to the accessibility tree, so matching on IDs
+never worked; this is why the app now matches on content-description text
+instead, e.g. `"Reel by someuser. Double tap to play or pause."`).
+
+If Instagram changes this label in a future update and blocking stops working:
 
 1. **Install `adb` only — not Android Studio.** Download "SDK Platform-Tools"
    for your OS from Google directly (search "android platform tools
@@ -81,31 +100,28 @@ guess, capture what's actually on screen:
    number" 7 times > Developer options > USB debugging.
 3. Plug your phone in via USB. On your phone, approve the "Allow USB
    debugging?" prompt.
-4. In a terminal, `cd` into the folder you unzipped, then run:
+4. In a terminal, `cd` into the platform-tools folder, then run:
    ```
-   ./adb devices
+   adb devices
    ```
-   You should see your phone listed (approve any on-phone prompt if it
-   appears). On Windows use `adb.exe` instead of `./adb`.
-5. Make sure `DEBUG_DUMP = true` in `ReelBlockerService.kt` (it is by
-   default), rebuild via the GitHub Actions workflow, and reinstall the APK.
+   (If more than one device/emulator shows up, pin the command to your phone
+   with `-s <serial>` right after `adb`, e.g. `adb -s R5CX92M16GR devices`.)
+5. In `ReelBlockerService.kt`, set `DEBUG_DUMP = true`, rebuild via the GitHub
+   Actions workflow, and reinstall the APK (`adb install -r app-debug.apk` —
+   installing via adb skips Android's "restricted settings" block entirely,
+   so no extra steps needed).
 6. Run:
    ```
-   ./adb logcat -s ReelBlockerDump:D
+   adb logcat -s ReelBlockerDump:D
    ```
 7. Open Instagram and tap into Reels. You'll see a stream of lines like:
    ```
-   [12] class=android.widget.FrameLayout id=com.instagram.android:id/some_id desc=- text=-
+   [7] class=android.view.ViewGroup id=- desc=Reel by someuser. Double tap to play or pause. text=-
    ```
-8. Copy the block of lines that appear right as/after Reels opens (a few
-   dozen lines is plenty) and share them — that's enough to identify the
-   real IDs, classes, or content-descriptions to key off of, and update
-   `REEL_KEYWORDS` (or the detection logic itself, if Instagram is using
-   Jetpack Compose views that don't carry a resource ID the way classic
-   Android Views do — in which case detection needs to match on class name
-   or content description instead).
-9. Once detection is confirmed reliable, set `DEBUG_DUMP = false` to stop the
-   log spam and save a little battery.
+8. Find the current wording of that label and update `isReelPlayerDescription()`
+   in `ReelBlockerService.kt` to match it.
+9. Once confirmed working again, set `DEBUG_DUMP = false` to stop the log
+   spam and save a little battery.
 
 This is the same maintenance burden every accessibility-service-based blocker
 (free or paid) has — there's no way around Instagram being able to change its
