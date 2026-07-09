@@ -7,13 +7,16 @@ import android.view.accessibility.AccessibilityNodeInfo
 
 /**
  * Watches Instagram's screen (and ONLY Instagram's — see accessibility_service_config.xml)
- * for view IDs associated with the Reels / "Clips" player, and switches back to the
- * Home tab whenever it spots one.
+ * for the accessibility label Instagram attaches to the immersive Reels player
+ * (e.g. "Reel by someuser. Double tap to play or pause."), and switches back to
+ * the Home tab whenever it spots one.
  *
- * NOTE: Instagram obfuscates and periodically changes its internal view IDs. If this
- * stops working after an Instagram update, use Android Studio's Layout Inspector
- * (or `adb shell uiautomator dump`) while Reels is open to find the current IDs and
- * add them to REEL_KEYWORDS below.
+ * NOTE: this was confirmed against a real device capture — Instagram does not
+ * expose resource IDs (viewIdResourceName) to the accessibility tree at all, so
+ * detection deliberately keys off content-description text instead. If this
+ * stops working after an Instagram update, capture a fresh `adb logcat -s
+ * ReelBlockerDump:D` dump (flip DEBUG_DUMP to true below) while Reels is open,
+ * find the new label pattern, and update isReelPlayerDescription() below.
  */
 class ReelBlockerService : AccessibilityService() {
 
@@ -36,10 +39,14 @@ class ReelBlockerService : AccessibilityService() {
 
         private const val COOLDOWN_MS = 1_200L
 
-        // TEMPORARY: while we're figuring out Instagram's current real view IDs,
-        // this dumps the whole node tree to Logcat (tag "ReelBlockerDump") every
-        // couple of seconds so it can be captured with `adb logcat -s ReelBlockerDump:D`.
-        // Set to false once detection is confirmed working, to save battery/log noise.
+        // Confirmed via a real adb logcat capture: Instagram does NOT expose
+        // viewIdResourceName to the accessibility tree at all (every node came
+        // back null). Detection instead keys off the accessibility label
+        // Instagram attaches to the immersive Reels player for screen-reader
+        // users, e.g. "Reel by shahin_doors. Double tap to play or pause."
+        // This deliberately excludes "Suggested Reel by ..." cards, which is
+        // the wording used for an inline reel card in the normal Home feed —
+        // we don't want to kick the user out of their feed for those.
         private const val DEBUG_DUMP = true
         private const val DUMP_INTERVAL_MS = 2_000L
     }
@@ -71,7 +78,7 @@ class ReelBlockerService : AccessibilityService() {
             if (now - lastActionTime < COOLDOWN_MS) return
 
             if (containsReelsNode(root)) {
-                Log.d(TAG, "Reels view detected — redirecting to Home")
+                Log.d(TAG, "Reels player detected — redirecting to Home")
                 lastActionTime = now
                 goHomeOrBack(root)
             }
@@ -97,10 +104,19 @@ class ReelBlockerService : AccessibilityService() {
         }
     }
 
-    /** Recursively scans the node tree for a view ID matching any Reels keyword. */
+    /** Recursively scans the node tree for the immersive Reels player's a11y label. */
     private fun containsReelsNode(node: AccessibilityNodeInfo, depth: Int = 0): Boolean {
         if (depth > 50) return false // guard against pathologically deep trees
 
+        node.contentDescription?.toString()?.let { desc ->
+            if (desc.contains("reel", ignoreCase = true)) {
+                Log.d(DUMP_TAG, "NEAR-MISS candidate desc=\"$desc\" matches=${isReelPlayerDescription(desc)}")
+            }
+            if (isReelPlayerDescription(desc)) return true
+        }
+
+        // Kept as a harmless fallback in case a future Instagram build
+        // re-exposes resource IDs to the accessibility tree.
         node.viewIdResourceName?.let { id ->
             if (REEL_KEYWORDS.any { id.contains(it, ignoreCase = true) }) return true
         }
@@ -112,6 +128,13 @@ class ReelBlockerService : AccessibilityService() {
             if (hit) return true
         }
         return false
+    }
+
+    private fun isReelPlayerDescription(desc: String): Boolean {
+        // Matches: "Reel by shahin_doors. Double tap to play or pause."
+        // Excludes: "Suggested Reel by Daily Brief Global, ..." (Home feed card)
+        return desc.startsWith("Reel by", ignoreCase = true) &&
+            desc.contains("Double tap to play or pause", ignoreCase = true)
     }
 
     /** Prefer tapping the Home tab (keeps Instagram open); fall back to system back. */
