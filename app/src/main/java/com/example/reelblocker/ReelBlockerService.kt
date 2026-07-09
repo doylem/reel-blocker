@@ -110,9 +110,17 @@ class ReelBlockerService : AccessibilityService() {
 
         node.contentDescription?.toString()?.let { desc ->
             if (desc.contains("reel", ignoreCase = true)) {
-                Log.d(DUMP_TAG, "NEAR-MISS candidate desc=\"$desc\" matches=${isReelPlayerDescription(desc)}")
+                Log.d(
+                    DUMP_TAG,
+                    "NEAR-MISS candidate desc=\"$desc\" matches=${isReelPlayerDescription(desc)} " +
+                        "visible=${node.isVisibleToUser}"
+                )
             }
-            if (isReelPlayerDescription(desc)) return true
+            // Instagram keeps the Reels player's fragment/ViewPager page alive in the
+            // accessibility tree even after switching back to Home (it's just off-screen),
+            // so without the visibility check we'd detect it forever and loop back to
+            // Home on every cycle instead of just once.
+            if (isReelPlayerDescription(desc) && node.isVisibleToUser) return true
         }
 
         // Kept as a harmless fallback in case a future Instagram build
