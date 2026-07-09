@@ -47,7 +47,7 @@ class ReelBlockerService : AccessibilityService() {
         // This deliberately excludes "Suggested Reel by ..." cards, which is
         // the wording used for an inline reel card in the normal Home feed —
         // we don't want to kick the user out of their feed for those.
-        private const val DEBUG_DUMP = true
+        private const val DEBUG_DUMP = false
         private const val DUMP_INTERVAL_MS = 2_000L
     }
 
