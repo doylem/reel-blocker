@@ -1,9 +1,12 @@
 package com.example.reelblocker
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 
 /**
  * Watches Instagram's screen (and ONLY Instagram's — see accessibility_service_config.xml)
@@ -38,6 +41,45 @@ class ReelBlockerService : AccessibilityService() {
 
     private var lastActionTime = 0L
     private var lastDumpTime = 0L
+
+    // --- Auto clipboard cleaner (unrelated to Reels detection above) ---
+    // IG's in-app browser "Copy Link" button injects fbclid onto the URL,
+    // which overflows the Stories link-sticker character limit. This watches
+    // the clipboard and strips known tracker params the instant something is
+    // copied, but only while Instagram is the active app (checked via
+    // rootInActiveWindow below) so it never touches clipboard content from
+    // other apps.
+    private val clipboardManager by lazy {
+        getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+    }
+    private var isOwnClipboardWrite = false
+
+    private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+        onClipboardChanged()
+    }
+
+    private fun onClipboardChanged() {
+        if (isOwnClipboardWrite) {
+            isOwnClipboardWrite = false
+            return
+        }
+
+        // Only auto-clean while Instagram is the foreground app.
+        val activePackage = rootInActiveWindow?.packageName?.toString()
+        if (activePackage != INSTAGRAM_PACKAGE) return
+
+        val clip = clipboardManager.primaryClip ?: return
+        if (clip.itemCount == 0) return
+        val text = clip.getItemAt(0).coerceToText(this)?.toString() ?: return
+        if (text.isBlank()) return
+
+        val cleaned = UrlCleaner.cleanText(text)
+        if (cleaned == text) return // nothing to strip, leave clipboard alone
+
+        isOwnClipboardWrite = true
+        clipboardManager.setPrimaryClip(ClipData.newPlainText("cleaned_url", cleaned))
+        Toast.makeText(this, "Removed tracking params from link", Toast.LENGTH_SHORT).show()
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
@@ -161,5 +203,11 @@ class ReelBlockerService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.d(TAG, "Reel Blocker service connected")
+        clipboardManager.addPrimaryClipChangedListener(clipboardListener)
+    }
+
+    override fun onDestroy() {
+        clipboardManager.removePrimaryClipChangedListener(clipboardListener)
+        super.onDestroy()
     }
 }
