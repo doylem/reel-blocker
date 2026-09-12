@@ -103,17 +103,20 @@ class ReelBlockerService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (event.packageName != INSTAGRAM_PACKAGE) return
 
-        // TEMPORARY diagnostic: log every click inside Instagram so we can find
-        // the exact label on the "Copy Link" button. Remove once found.
+        // TEMPORARY diagnostic: log every click from ANY package (not just
+        // Instagram) so we can find which window "Copy Link" actually lives
+        // in — the Instagram-only capture came up empty, suggesting it's a
+        // system share sheet or similar. Remove once found.
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             Log.d(
                 CLICK_TAG,
-                "CLICK text=${event.text} desc=${event.contentDescription} " +
+                "CLICK pkg=${event.packageName} text=${event.text} desc=${event.contentDescription} " +
                     "class=${event.className} source=${event.source?.viewIdResourceName}"
             )
         }
+
+        if (event.packageName != INSTAGRAM_PACKAGE) return
 
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
