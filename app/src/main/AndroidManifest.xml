@@ -16,6 +16,19 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".UrlCleanerActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:label="Clean link">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".ReelBlockerService"
             android:exported="false"
