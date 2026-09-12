@@ -27,6 +27,7 @@ class ReelBlockerService : AccessibilityService() {
         private const val TAG = "ReelBlocker"
         private const val DUMP_TAG = "ReelBlockerDump"
         private const val CLIP_TAG = "ReelBlockerClip"
+        private const val CLICK_TAG = "ReelBlockerClick"
         private const val INSTAGRAM_PACKAGE = "com.instagram.android"
 
         private const val COOLDOWN_MS = 1_200L
@@ -103,6 +104,16 @@ class ReelBlockerService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         if (event.packageName != INSTAGRAM_PACKAGE) return
+
+        // TEMPORARY diagnostic: log every click inside Instagram so we can find
+        // the exact label on the "Copy Link" button. Remove once found.
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            Log.d(
+                CLICK_TAG,
+                "CLICK text=${event.text} desc=${event.contentDescription} " +
+                    "class=${event.className} source=${event.source?.viewIdResourceName}"
+            )
+        }
 
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
