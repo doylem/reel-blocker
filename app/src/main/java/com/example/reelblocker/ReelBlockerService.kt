@@ -1,8 +1,7 @@
 package com.example.reelblocker
 
 import android.accessibilityservice.AccessibilityService
-import android.content.ClipData
-import android.content.ClipboardManager
+import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -27,7 +26,6 @@ class ReelBlockerService : AccessibilityService() {
         private const val TAG = "ReelBlocker"
         private const val DUMP_TAG = "ReelBlockerDump"
         private const val CLIP_TAG = "ReelBlockerClip"
-        private const val CLICK_TAG = "ReelBlockerClick"
         private const val INSTAGRAM_PACKAGE = "com.instagram.android"
 
         private const val COOLDOWN_MS = 1_200L
@@ -44,79 +42,53 @@ class ReelBlockerService : AccessibilityService() {
     private var lastActionTime = 0L
     private var lastDumpTime = 0L
 
-    // --- Auto clipboard cleaner (unrelated to Reels detection above) ---
-    // IG's in-app browser "Copy Link" button injects fbclid onto the URL,
-    // which overflows the Stories link-sticker character limit. This watches
-    // the clipboard and strips known tracker params the instant something is
-    // copied, but only while Instagram is the active app (checked via
-    // rootInActiveWindow below) so it never touches clipboard content from
-    // other apps.
-    private val clipboardManager by lazy {
-        getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-    }
-    private var isOwnClipboardWrite = false
+    // --- Auto link-field cleaner (unrelated to Reels detection above) ---
+    // IG's in-app browser "Copy Link" button injects fbclid (and IG's own
+    // share flow adds utm_id) onto the URL, which overflows the Stories
+    // link-sticker character limit. A clipboard-listener approach was tried
+    // first and confirmed dead on this device: background/unfocused apps
+    // don't get clipboard-change callbacks at all (real device capture,
+    // zero events). Instead, this watches Instagram's own text fields via
+    // TYPE_VIEW_TEXT_CHANGED and rewrites the field's content in place via
+    // ACTION_SET_TEXT the instant a URL with tracker params lands in it —
+    // confirmed via a real capture that the Stories link-sticker EditText
+    // holds the full pasted URL (including fbclid/utm_id) as event.text.
+    private fun onTextChanged(event: AccessibilityEvent) {
+        val node = event.source ?: return
+        try {
+            if (!node.isEditable) return
 
-    private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
-        onClipboardChanged()
-    }
+            val text = node.text?.toString() ?: return
+            Log.d(CLIP_TAG, "text changed in editable field: $text")
 
-    private fun onClipboardChanged() {
-        Log.d(CLIP_TAG, "clipboard change detected")
+            val cleaned = UrlCleaner.cleanText(text)
+            if (cleaned == text) return // nothing to strip
 
-        if (isOwnClipboardWrite) {
-            Log.d(CLIP_TAG, "ignoring our own write")
-            isOwnClipboardWrite = false
-            return
+            Log.d(CLIP_TAG, "rewriting field to: $cleaned")
+            val arguments = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    cleaned
+                )
+            }
+            val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            Log.d(CLIP_TAG, "ACTION_SET_TEXT success=$success")
+            if (success) {
+                Toast.makeText(this, "Removed tracking params from link", Toast.LENGTH_SHORT).show()
+            }
+        } finally {
+            node.recycle()
         }
-
-        // Only auto-clean while Instagram is the foreground app.
-        val activePackage = rootInActiveWindow?.packageName?.toString()
-        Log.d(CLIP_TAG, "active window package = $activePackage")
-        if (activePackage != INSTAGRAM_PACKAGE) {
-            Log.d(CLIP_TAG, "skipping, not Instagram")
-            return
-        }
-
-        val clip = clipboardManager.primaryClip
-        if (clip == null || clip.itemCount == 0) {
-            Log.d(CLIP_TAG, "clip is empty")
-            return
-        }
-        val text = clip.getItemAt(0).coerceToText(this)?.toString()
-        if (text.isNullOrBlank()) {
-            Log.d(CLIP_TAG, "clip text is blank/null")
-            return
-        }
-        Log.d(CLIP_TAG, "clip text = $text")
-
-        val cleaned = UrlCleaner.cleanText(text)
-        if (cleaned == text) {
-            Log.d(CLIP_TAG, "nothing to strip")
-            return
-        }
-
-        Log.d(CLIP_TAG, "cleaned = $cleaned")
-        isOwnClipboardWrite = true
-        clipboardManager.setPrimaryClip(ClipData.newPlainText("cleaned_url", cleaned))
-        Toast.makeText(this, "Removed tracking params from link", Toast.LENGTH_SHORT).show()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-
-        // TEMPORARY diagnostic: log every click from ANY package (not just
-        // Instagram) so we can find which window "Copy Link" actually lives
-        // in — the Instagram-only capture came up empty, suggesting it's a
-        // system share sheet or similar. Remove once found.
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
-            Log.d(
-                CLICK_TAG,
-                "CLICK pkg=${event.packageName} text=${event.text} desc=${event.contentDescription} " +
-                    "class=${event.className} source=${event.source?.viewIdResourceName}"
-            )
-        }
-
         if (event.packageName != INSTAGRAM_PACKAGE) return
+
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+            onTextChanged(event)
+            return
+        }
 
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
@@ -236,11 +208,5 @@ class ReelBlockerService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.d(TAG, "Reel Blocker service connected")
-        clipboardManager.addPrimaryClipChangedListener(clipboardListener)
-    }
-
-    override fun onDestroy() {
-        clipboardManager.removePrimaryClipChangedListener(clipboardListener)
-        super.onDestroy()
     }
 }
