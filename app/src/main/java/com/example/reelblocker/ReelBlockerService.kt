@@ -26,6 +26,7 @@ class ReelBlockerService : AccessibilityService() {
     companion object {
         private const val TAG = "ReelBlocker"
         private const val DUMP_TAG = "ReelBlockerDump"
+        private const val CLIP_TAG = "ReelBlockerClip"
         private const val INSTAGRAM_PACKAGE = "com.instagram.android"
 
         private const val COOLDOWN_MS = 1_200L
@@ -59,23 +60,41 @@ class ReelBlockerService : AccessibilityService() {
     }
 
     private fun onClipboardChanged() {
+        Log.d(CLIP_TAG, "clipboard change detected")
+
         if (isOwnClipboardWrite) {
+            Log.d(CLIP_TAG, "ignoring our own write")
             isOwnClipboardWrite = false
             return
         }
 
         // Only auto-clean while Instagram is the foreground app.
         val activePackage = rootInActiveWindow?.packageName?.toString()
-        if (activePackage != INSTAGRAM_PACKAGE) return
+        Log.d(CLIP_TAG, "active window package = $activePackage")
+        if (activePackage != INSTAGRAM_PACKAGE) {
+            Log.d(CLIP_TAG, "skipping, not Instagram")
+            return
+        }
 
-        val clip = clipboardManager.primaryClip ?: return
-        if (clip.itemCount == 0) return
-        val text = clip.getItemAt(0).coerceToText(this)?.toString() ?: return
-        if (text.isBlank()) return
+        val clip = clipboardManager.primaryClip
+        if (clip == null || clip.itemCount == 0) {
+            Log.d(CLIP_TAG, "clip is empty")
+            return
+        }
+        val text = clip.getItemAt(0).coerceToText(this)?.toString()
+        if (text.isNullOrBlank()) {
+            Log.d(CLIP_TAG, "clip text is blank/null")
+            return
+        }
+        Log.d(CLIP_TAG, "clip text = $text")
 
         val cleaned = UrlCleaner.cleanText(text)
-        if (cleaned == text) return // nothing to strip, leave clipboard alone
+        if (cleaned == text) {
+            Log.d(CLIP_TAG, "nothing to strip")
+            return
+        }
 
+        Log.d(CLIP_TAG, "cleaned = $cleaned")
         isOwnClipboardWrite = true
         clipboardManager.setPrimaryClip(ClipData.newPlainText("cleaned_url", cleaned))
         Toast.makeText(this, "Removed tracking params from link", Toast.LENGTH_SHORT).show()
